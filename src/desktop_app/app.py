@@ -1425,8 +1425,8 @@ class JarvisSystemTray:
         """Open the provider & model configuration dialog."""
         from desktop_app.provider_panel import ProviderConfigDialog
         try:
-            from jarvis.config import load_config
-            cfg = load_config()
+            from jarvis.config import load_settings
+            cfg = load_settings()
         except Exception:
             cfg = None
         dialog = ProviderConfigDialog(parent=None, cfg=cfg)
