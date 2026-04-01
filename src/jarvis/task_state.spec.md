@@ -162,3 +162,46 @@ run_reply_engine(...)
 
 - **`tests/test_task_state.py`** – unit tests for `TaskState`, `TaskStep`, and the module-level singleton.
 - **`tests/test_approval.py`** – unit tests for `assess_risk`, `requires_approval`, `approval_prompt`, and `classify_request`.
+
+---
+
+## 5. Persistence (Long-Running Task Support)
+
+### Purpose
+
+Enables task state to survive process restarts and remote session drops.
+The active `TaskState` can be snapshot to disk and restored on next startup,
+supporting the long-running autonomous workflow pattern.
+
+### Public API
+
+```python
+from jarvis.task_state import save_active_task, load_saved_task, clear_saved_task
+```
+
+- `save_active_task(task_dir=None) -> bool` – Persist current state to `active_task.json`. Returns True on success.
+- `load_saved_task(task_dir=None) -> bool` – Restore from disk. Returns True if a saved state was found.
+- `clear_saved_task(task_dir=None)` – Remove the persisted file.
+
+### Storage Location
+
+Default: `~/.local/share/jarvis/task_state/active_task.json`
+
+Override via `task_dir` argument or `XDG_DATA_HOME` environment variable.
+
+### Resumption Flow
+
+```
+Startup
+  ├─ load_saved_task() → True?
+  │    └─ TaskState restored with EXECUTING/AWAITING_APPROVAL status
+  │         └─ can_resume() → True (pending steps found)
+  │              └─ Engine can offer to resume the interrupted task
+  └─ No saved task → IDLE (normal startup)
+```
+
+### Notes
+
+- Only call `save_active_task()` when meaningful progress has been made.
+- Call `clear_saved_task()` after a task completes to avoid ghost state on next start.
+- Persistence is advisory: if the saved file is corrupt or stale, the engine proceeds in IDLE state.

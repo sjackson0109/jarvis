@@ -22,6 +22,9 @@ src/desktop_app/
 ├── themes.py            # Qt stylesheets and color palette
 ├── diary_dialog.py      # End-of-session diary update dialog
 ├── memory_viewer.py     # Flask-based memory browser
+├── project_panel.py     # ProjectManagementDialog – project CRUD UI
+├── provider_panel.py    # ProviderConfigDialog – hardware and provider config UI
+├── task_dashboard.py    # TaskDashboardDialog – live task and sub-agent monitor
 ├── updater.py           # Update checking logic
 ├── update_dialog.py     # Update notification dialogs
 └── desktop_assets/      # Icons and images
@@ -86,6 +89,37 @@ The central controller that manages:
 | **MemoryViewerWindow** | Web-based memory browser (Flask server) |
 | **FaceWindow** | Animated face that reacts to speaking state |
 | **SetupWizard** | First-run configuration (Ollama, models, profile) |
+| **ProjectManagementDialog** | Create, edit, delete, and activate projects; set voice-default |
+| **ProviderConfigDialog** | View hardware profile, configured providers, availability status, and provider selection policy |
+| **TaskDashboardDialog** | Live view of the active task state, running sub-agents, and recent task history |
+
+### ProjectManagementDialog (`project_panel.py`)
+
+Provides a full CRUD interface for the project system:
+
+- Lists all projects with name, description, and voice-default indicator.
+- Create / edit project name, description, and policy fields.
+- Delete a project (with confirmation).
+- Set the selected project as the voice-default for the daemon session.
+- Backed by `ProjectManager` from `src/jarvis/project/manager.py`.
+
+### ProviderConfigDialog (`provider_panel.py`)
+
+Displays the current provider and hardware configuration:
+
+- **Hardware panel**: shows detected RAM, CPU cores, OS, execution mode, and recommended model tier (from `HardwareProfile`).
+- **Providers panel**: lists all registered providers with their kind, model, and availability status; triggers `check_availability()` on demand.
+- **Policy panel**: displays current `PolicyConstraints` (privacy level, force overrides) and allows saving changes back to the daemon config.
+- Backed by `get_provider_registry()` and `get_hardware_profile()`.
+
+### TaskDashboardDialog (`task_dashboard.py`)
+
+Live operational view for multi-step and autonomous tasks:
+
+- **Active task panel**: displays current `TaskState` (intent, status, step list with PENDING/RUNNING/SUCCEEDED/FAILED indicators, timing).
+- **Sub-agents panel**: lists all running `SubAgentContext` entries from `SubAgentOrchestrator`, showing template name, delegated task, and elapsed time.
+- **History panel**: shows recent completed `TaskMemoryRecord` entries from `TaskMemoryStore`.
+- Auto-refreshes on a timer while open.
 
 ### LogViewerWindow Features
 
