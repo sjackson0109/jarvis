@@ -1252,6 +1252,21 @@ class JarvisSystemTray:
         self.memory_action.triggered.connect(self.show_memory_viewer)
         self.menu.addAction(self.memory_action)
 
+        # Project management action
+        self.projects_action = QAction("🗂️ Projects...")
+        self.projects_action.triggered.connect(self.show_project_management)
+        self.menu.addAction(self.projects_action)
+
+        # Provider & model configuration action
+        self.providers_action = QAction("⚙️ Providers & Models...")
+        self.providers_action.triggered.connect(self.show_provider_config)
+        self.menu.addAction(self.providers_action)
+
+        # Task dashboard action
+        self.dashboard_action = QAction("📊 Dashboard...")
+        self.dashboard_action.triggered.connect(self.show_task_dashboard)
+        self.menu.addAction(self.dashboard_action)
+
         # Face window action
         self.face_action = QAction("👤 Show Face")
         self.face_action.triggered.connect(self.show_face_window)
@@ -1399,6 +1414,29 @@ class JarvisSystemTray:
         self.face_window.show()
         self.face_window.raise_()
         self.face_window.activateWindow()
+
+    def show_project_management(self) -> None:
+        """Open the project management dialog."""
+        from desktop_app.project_panel import ProjectManagementDialog
+        dialog = ProjectManagementDialog(parent=None)
+        dialog.exec()
+
+    def show_provider_config(self) -> None:
+        """Open the provider & model configuration dialog."""
+        from desktop_app.provider_panel import ProviderConfigDialog
+        try:
+            from jarvis.config import load_config
+            cfg = load_config()
+        except Exception:
+            cfg = None
+        dialog = ProviderConfigDialog(parent=None, cfg=cfg)
+        dialog.exec()
+
+    def show_task_dashboard(self) -> None:
+        """Open the task dashboard dialog."""
+        from desktop_app.task_dashboard import TaskDashboardDialog
+        dialog = TaskDashboardDialog(parent=None)
+        dialog.exec()
 
     def open_directory(self, directory_path: Path, directory_name: str) -> None:
         """Open a directory in the system file manager."""
