@@ -159,6 +159,31 @@ class Settings:
     # MCP Integration
     mcps: Dict[str, Any]
 
+    # Schema version for migration tracking (do not set manually)
+    _config_version: int
+
+    # Public API Providers
+    anthropic_api_key: str | None
+    anthropic_model: str
+
+    # Provider Selection Policy
+    provider_privacy_level: str    # "local_only", "prefer_local", "allow_public"
+    provider_force_id: str | None  # Force a specific provider ID
+    provider_force_model: str | None  # Force a specific model ID
+
+    # Hardware Execution Mode Override
+    # None = auto-detect; or "low_resource", "balanced", "performance", "cluster_assisted"
+    hardware_execution_mode: str | None
+
+    # Project System
+    active_project_id: str | None
+    projects_dir: str | None  # Directory for project config files
+
+    # Guardrails
+    guardrail_allowed_paths: list[str]
+    guardrail_denied_paths: list[str]
+    guardrail_allow_system_paths: bool
+
 
 
 def _default_config_path() -> Path:
@@ -210,6 +235,11 @@ def _migrate_config(cfg_path: Path, cfg_json: Dict[str, Any]) -> Dict[str, Any]:
             print("📢 Upgraded TTS engine: system → piper (neural voice with auto-download)", flush=True)
             print("   To revert: set \"tts_engine\": \"system\" in config.json", flush=True)
         cfg_json["_config_version"] = 1
+        modified = True
+
+    # Migration v2: introduce provider / hardware / project / guardrail fields
+    if migration_version < 2:
+        cfg_json["_config_version"] = 2
         modified = True
 
     # Save migrated config
@@ -397,6 +427,30 @@ def get_default_config() -> Dict[str, Any]:
 
         # MCP Integration (external servers Jarvis can use). No defaults.
         "mcps": {},
+
+        # Schema version (managed by migration)
+        "_config_version": 0,
+
+        # Public API Providers
+        "anthropic_api_key": None,
+        "anthropic_model": "claude-3-5-haiku-20241022",
+
+        # Provider Selection Policy
+        "provider_privacy_level": "prefer_local",
+        "provider_force_id": None,
+        "provider_force_model": None,
+
+        # Hardware Execution Mode Override
+        "hardware_execution_mode": None,
+
+        # Project System
+        "active_project_id": None,
+        "projects_dir": None,
+
+        # Guardrails
+        "guardrail_allowed_paths": [],
+        "guardrail_denied_paths": [],
+        "guardrail_allow_system_paths": False,
     }
 
 
@@ -541,6 +595,40 @@ def load_settings() -> Settings:
     llm_embedding_timeout_sec = float(merged.get("llm_embedding_timeout_sec", 60.0))
     llm_profile_select_timeout_sec = float(merged.get("llm_profile_select_timeout_sec", 30.0))
 
+    # Provider / hardware / project / guardrail fields
+    config_version = int(merged.get("_config_version", 0))
+    anthropic_api_key_val = merged.get("anthropic_api_key")
+    anthropic_api_key = (
+        None if anthropic_api_key_val in (None, "", "null") else str(anthropic_api_key_val)
+    )
+    anthropic_model = str(merged.get("anthropic_model", "claude-3-5-haiku-20241022"))
+    provider_privacy_level = str(merged.get("provider_privacy_level", "prefer_local"))
+    if provider_privacy_level not in ("local_only", "prefer_local", "allow_public"):
+        provider_privacy_level = "prefer_local"
+    provider_force_id_val = merged.get("provider_force_id")
+    provider_force_id = (
+        None if provider_force_id_val in (None, "", "null") else str(provider_force_id_val)
+    )
+    provider_force_model_val = merged.get("provider_force_model")
+    provider_force_model = (
+        None if provider_force_model_val in (None, "", "null") else str(provider_force_model_val)
+    )
+    hardware_execution_mode_val = merged.get("hardware_execution_mode")
+    hardware_execution_mode = (
+        None
+        if hardware_execution_mode_val in (None, "", "null")
+        else str(hardware_execution_mode_val)
+    )
+    active_project_id_val = merged.get("active_project_id")
+    active_project_id = (
+        None if active_project_id_val in (None, "", "null") else str(active_project_id_val)
+    )
+    projects_dir_val = merged.get("projects_dir")
+    projects_dir = None if projects_dir_val in (None, "", "null") else str(projects_dir_val)
+    guardrail_allowed_paths = _ensure_list(merged.get("guardrail_allowed_paths"))
+    guardrail_denied_paths = _ensure_list(merged.get("guardrail_denied_paths"))
+    guardrail_allow_system_paths = bool(merged.get("guardrail_allow_system_paths", False))
+
     return Settings(
         # Database & Storage
         db_path=db_path,
@@ -651,4 +739,28 @@ def load_settings() -> Settings:
 
         # MCP Integration
         mcps=mcps,
+
+        # Schema version
+        _config_version=config_version,
+
+        # Public API Providers
+        anthropic_api_key=anthropic_api_key,
+        anthropic_model=anthropic_model,
+
+        # Provider Selection Policy
+        provider_privacy_level=provider_privacy_level,
+        provider_force_id=provider_force_id,
+        provider_force_model=provider_force_model,
+
+        # Hardware Execution Mode Override
+        hardware_execution_mode=hardware_execution_mode,
+
+        # Project System
+        active_project_id=active_project_id,
+        projects_dir=projects_dir,
+
+        # Guardrails
+        guardrail_allowed_paths=guardrail_allowed_paths,
+        guardrail_denied_paths=guardrail_denied_paths,
+        guardrail_allow_system_paths=guardrail_allow_system_paths,
     )
