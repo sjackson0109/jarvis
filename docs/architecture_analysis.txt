@@ -1,0 +1,355 @@
+JARVIS: ARCHITECTURE & RUNTIME ANALYSIS
+=======================================
+Generated: 2026-04-01
+Repository: sjackson0109/jarvis
+
+
+1. PROJECT OVERVIEW & TOP-LEVEL STRUCTURE
+------------------------------------------
+
+  jarvis/
+  ├── src/
+  │   ├── jarvis/           # Core voice assistant daemon
+  │   └── desktop_app/      # PyQt6 desktop GUI + system tray
+  ├── tests/                # Unit and integration tests
+  ├── evals/                # Accuracy evaluation suite
+  ├── docs/                 # Documentation
+  ├── examples/             # Usage examples
+  ├── installer/            # Installation scripts
+  ├── scripts/              # Utility scripts
+  ├── requirements.txt      # Python dependencies
+  └── jarvis_desktop.spec   # PyInstaller packaging spec
+
+Jarvis is a privacy-first, fully local voice assistant. All LLM inference
+runs locally via Ollama, with no mandatory cloud APIs.
+
+
+2. ENTRY POINTS
+---------------
+
+CLI daemon — src/jarvis/main.py (lines 1–12):
+  from .daemon import main
+  main()
+Run via: python -m jarvis
+Delegates immediately to the daemon.
+
+Desktop app — src/desktop_app/__main__.py (lines 1–7):
+  from desktop_app import main
+  main()
+Run via: python -m desktop_app
+Launches a PyQt6 system-tray application that spawns and manages the
+daemon as a subprocess.
+
+
+3. DAEMON ORCHESTRATOR (src/jarvis/daemon.py, lines 1–481)
+------------------------------------------------------------
+
+The daemon is the central coordinator. On startup (lines 287–390) it:
+  1. Installs signal handlers for graceful shutdown
+  2. Loads config and initialises the SQLite database
+  3. Discovers and caches MCP tools from configured servers
+  4. Initialises dialogue memory
+  5. Detects geolocation (if enabled)
+  6. Creates the TTS engine (Piper or Chatterbox)
+  7. Starts the VoiceListener thread
+
+The main loop (lines 391–435) runs forever, sleeping 1 second per tick.
+Every 60 seconds it calls _check_and_update_diary() to flush conversation
+memory to the long-term diary.
+
+Graceful shutdown (lines 437–476): stops the listener thread, forces a
+final diary flush (45 s timeout), closes TTS and DB, then prints
+"👋 Daemon stopped".
+
+Desktop IPC (lines 53–90): the daemon exposes
+set_diary_update_callbacks(on_token, on_status, on_chunks, on_complete)
+so the desktop app can display live diary-update progress.
+
+
+4. HOW COMMANDS ARE RECEIVED
+------------------------------
+
+Jarvis supports three input channels:
+
+A. Voice Input (primary)
+   src/jarvis/listening/listener.py — class VoiceListener(threading.Thread)
+   (lines 119–350):
+     1. Audio captured via sounddevice callback
+     2. WebRTC VAD gates speech frames
+     3. faster-whisper (or mlx-whisper on Apple Silicon) transcribes audio
+     4. Transcript appended to a rolling 2-minute buffer (TranscriptBuffer
+        in transcript_buffer.py)
+     5. Wake word detection runs on two parallel paths:
+          - Audio-level: WakeWordDetector using openWakeWord model
+            (wake_detector.py)
+          - Text-level: fuzzy string match for "jarvis" and configured
+            aliases (wake_detection.py — is_wake_word_detected(),
+            extract_query_after_wake())
+     6. On wake, IntentJudge (intent_judge.py, lines 1–120) uses an LLM
+        call to determine whether the transcript constitutes a real command
+        (vs. background noise/echo)
+     7. Clean query dispatched to _dispatch_query() → run_reply_engine()
+
+B. Stdin Input
+   Enabled by cfg.use_stdin (config.py, line 291). Bypasses the audio
+   pipeline entirely — useful for testing and scripting.
+
+C. Hot Window (automatic follow-up)
+   After TTS finishes playback, a short window (hot_window_seconds, default
+   3–6 s) opens where no wake word is needed. The EchoDetector
+   (echo_detection.py) filters out the assistant's own voice from replays.
+
+
+5. REPLY ENGINE (src/jarvis/reply/engine.py, lines 1–350+)
+------------------------------------------------------------
+
+The reply engine is invoked by run_reply_engine() for every dispatched
+query:
+  1. Profile selection (profile/profiles.py — select_profile_llm()): an
+     LLM call routes the query to the best-fit persona profile
+     (developer / business / life), taking into account previous profile
+     for follow-up continuity.
+  2. Memory enrichment (reply/enrichment.py —
+     extract_search_params_for_memory()): the engine searches dialogue
+     memory for relevant past context.
+  3. Prompt construction: system prompt assembled from profile + dynamic
+     context (current time/date, location) + tool protocol from
+     reply/prompts/system.py and reply/prompts/model_variants.py.
+     Small models (<7B) receive extra explicit "do NOT call tools for
+     greetings" constraints (ModelSize.SMALL/LARGE in model_variants.py).
+  4. Agentic messages loop (up to agentic_max_turns, default 8): sends
+     messages to Ollama with tools list; if the LLM returns a tool_calls
+     field the engine executes the tool and appends the result; repeats
+     until the LLM returns a natural-language content field.
+  5. TTS output: final text streamed to the TTS engine via
+     call_llm_streaming() in llm.py.
+
+
+6. TOOLS SYSTEM (src/jarvis/tools/)
+-------------------------------------
+
+Abstract base (tools/base.py, lines 34–108)
+  Every tool implements:
+    class Tool(ABC):
+        name: str           # camelCase ID (e.g. "webSearch")
+        description: str    # Natural-language description for LLM
+        inputSchema: Dict   # JSON Schema
+        def run(self, args, context) -> ToolExecutionResult
+
+Built-in tools (tools/registry.py, lines 31–43 — BUILTIN_TOOLS dict):
+  Tool name           File                              Purpose
+  ──────────────────  ────────────────────────────────  ──────────────────────────────
+  webSearch           builtin/web_search.py             DuckDuckGo search
+  fetchWebPage        builtin/fetch_web_page.py         HTTP fetch + Playwright/BS4 parse
+  screenshot          builtin/screenshot.py             Screen capture + Tesseract OCR
+  localFiles          builtin/local_files.py            Local filesystem browsing
+  weather             builtin/weather.py                OpenWeatherMap API
+  recallConversation  builtin/recall_conversation.py    Semantic/keyword search of dialogue
+  stop                builtin/stop.py                   Stop/silence the assistant
+  refreshMCPTools     builtin/refresh_mcp_tools.py      Re-discover MCP tools
+  logMeal             builtin/nutrition/log_meal.py     Nutrition diary
+  fetchMeals          builtin/nutrition/fetch_meals.py  Meal history retrieval
+  deleteMeal          builtin/nutrition/delete_meal.py  Meal deletion
+
+MCP (Model Context Protocol) tools (tools/external/mcp_client.py, lines 1–100):
+  - initialize_mcp_tools() (registry.py, line 51) caches external tool
+    specs at daemon startup
+  - discover_mcp_tools() (line 121) connects to each configured MCP server
+    via stdio and calls list_tools()
+  - Tool names scoped as {server_name}__{tool_name}
+    (e.g. "github__search_repositories")
+  - invoke_tool_async() executes the tool via async MCP session; result
+    flattened to a text string
+
+Tool execution flow (engine.py, lines 166–350):
+  1. Build OpenAI-compatible messages array
+  2. Call Ollama /api/chat with tools parameter
+  3. Parse tool_calls from response
+  4. Call run_tool_with_retries() — with duplicate-call detection
+     (skips identical repeated calls)
+  5. Append {role: "tool", content: "<result>"} to messages
+  6. Loop back to LLM (max 8 turns)
+
+
+7. PROFILE SYSTEM (src/jarvis/profile/profiles.py, lines 1–150+)
+------------------------------------------------------------------
+
+Three profiles, each a frozen Profile(name, system_prompt) dataclass:
+  - developer: Surgical, minimal-fix code assistance; time/day/location-aware
+  - business:  Pragmatic; options with tradeoffs, crisp rationale
+  - life:      Calm; small steps, routines, health/habit nudges
+
+Each profile has an PROFILE_ALLOWED_TOOLS[profile_name] allowlist
+(profiles.py, lines 57–88):
+  - Developer & Business: 7 tools (no nutrition)
+  - Life: 10 tools (includes all nutrition tools)
+  - MCP tools are added on top of the allowlist dynamically
+
+Profile selection uses a fast LLM call (select_profile_llm()) that also
+detects whether the current query is a follow-up to a prior exchange.
+
+
+8. MEMORY ARCHITECTURE (src/jarvis/memory/)
+--------------------------------------------
+
+Three tiers:
+
+  Tier               File                       Lifetime        Mechanism
+  ─────────────────  ─────────────────────────  ──────────────  ────────────────────────────────────────
+  Transcript buffer  listening/transcript_       Rolling 2 min   In-memory TranscriptSegment list with
+                     buffer.py                                   timestamps
+  Dialogue memory    memory/conversation.py      5 min active    Thread-safe DialogueMemory with
+                                                 window; flushes threading.RLock()
+                                                 after 10 min
+  Diary              memory/db.py                Permanent       SQLite + sqlite-vss vector search;
+                                                                 hybrid keyword+embedding search
+
+Embeddings (memory/embeddings.py): generated via Ollama nomic-embed-text
+model. Vector search backed by FAISS (utils/fast_vector_store.py) with
+pure-Python fallback (utils/vector_store.py).
+
+
+9. LLM COMMUNICATION (src/jarvis/llm.py)
+------------------------------------------
+
+All LLM calls go to a local Ollama instance:
+  - call_llm_direct() (lines 9–37): single-shot JSON request to /api/chat
+  - call_llm_streaming() (lines 40–80+): streaming with per-token callback,
+    used for TTS to start speaking immediately
+  - chat_with_messages(): full messages loop including tool support
+
+Default config (config.py, lines 280–287):
+  - ollama_base_url:   http://127.0.0.1:11434
+  - ollama_chat_model: llama3.2:3b
+  - ollama_embed_model: nomic-embed-text
+  - Timeouts: chat 180 s, tools 300 s, embedding 60 s
+
+
+10. CONFIGURATION SYSTEM (src/jarvis/config.py, lines 1–380+)
+---------------------------------------------------------------
+
+  - Location: ~/.config/jarvis/config.json (or $JARVIS_CONFIG_PATH)
+  - Loading: load_config() (line 225) reads JSON; load_settings() (line 241)
+    merges with defaults into a frozen Settings dataclass (80+ fields,
+    lines 45–161)
+  - Migrations: _migrate_config() (lines 194–222) handles version upgrades
+    in-place (e.g. "system" TTS engine renamed to "piper")
+  - Key subsections: database paths, Ollama URLs/models, active profiles,
+    audio/VAD parameters, wake word config, Whisper model size, TTS engine,
+    memory timeouts, agentic loop limits, geolocation, MCP server definitions
+
+
+11. OUTPUT — TTS (src/jarvis/output/tts.py, lines 1–100+)
+-----------------------------------------------------------
+
+create_tts_engine() returns either:
+  - Piper TTS (piper-tts): fast local neural TTS; voice models
+    auto-downloaded
+  - Chatterbox TTS (chatterbox-tts 0.1.2): expressive local TTS
+
+A TunePlayer (output/tune_player.py) plays a short "thinking" sound while
+the LLM processes.
+
+
+12. DESKTOP APP (src/desktop_app/)
+------------------------------------
+
+A PyQt6 system-tray application (app.py):
+  - Manages the daemon as a subprocess; monitors health; graceful shutdown
+  - Embedded web-based memory viewer
+  - Configuration editor UI
+  - Animated face widget
+  - Live diary-update dialog (receives streaming tokens from daemon via
+    set_diary_update_callbacks())
+  - Crash log capture with init-section + recent-tail truncation
+
+
+13. DEBUG LOGGING (src/jarvis/debug.py, lines 1–38)
+-----------------------------------------------------
+
+debug_log(message, category):
+  - Only emits when cfg.voice_debug = True
+  - Writes to stderr in the format "[category] message"
+  - Config reads cached for 2 seconds (TTL) to avoid I/O on every log line
+  - Categories in use: "jarvis", "voice", "echo", "memory", "mcp",
+    "planning", "state", etc.
+
+
+14. SPECIFICATION FILES (*.spec.md)
+-------------------------------------
+
+  File                                Lines  Content
+  ──────────────────────────────────  ─────  ──────────────────────────────────────────────────
+  listening/listening.spec.md         337    Transcript-first architecture, dual wake detection,
+                                             hot window, intent judge, state machine transitions,
+                                             rolling buffer design
+  reply/reply.spec.md                 280    Full reply flow: profile selection → memory
+                                             enrichment → agentic loop → tool protocol →
+                                             dynamic context injection
+  reply/prompts/prompts.spec.md       100    Model-size-aware prompt variants; small-model
+                                             constraints for greeting detection
+  desktop_app/desktop_app.spec.md     –      Desktop app architecture
+
+
+15. DEPENDENCIES (key packages in requirements.txt)
+-----------------------------------------------------
+
+  Category      Package                            Purpose
+  ────────────  ─────────────────────────────────  ───────────────────────────
+  ASR           faster-whisper==1.0.3              Local speech recognition (CPU)
+                mlx-whisper>=0.4.0                 Local speech recognition (Apple Silicon)
+  Audio         sounddevice==0.4.7                 Audio I/O
+                webrtcvad==2.0.10                  Voice activity detection
+  Wake word     openwakeword>=0.6.0                Audio-level wake detection
+  MCP           mcp==1.13.1                        External tool servers
+  TTS           piper-tts>=1.3.0                   Local speech synthesis
+                chatterbox-tts==0.1.2              Expressive local speech synthesis
+  Web           requests==2.32.3                   HTTP client
+                beautifulsoup4>=4.12.0             HTML parsing
+                playwright>=1.40.0                 Browser automation
+  Vector search faiss-cpu>=1.7.4                   Semantic memory search
+  Desktop       PyQt6>=6.6.0                       GUI framework
+                PyQt6-WebEngine>=6.6.0             Embedded web view
+                pyinstaller>=6.13.0                App packaging
+  Geo           geoip2==4.8.0                      Local IP geolocation
+  Fuzzy match   rapidfuzz==3.6.1                   Wake word text matching
+  Testing       pytest==8.3.2                      Test suite
+                pytest-repeat==0.9.3               Repeat test runs
+
+
+16. END-TO-END REQUEST FLOW
+-----------------------------
+
+  Microphone audio
+      │
+      ▼
+  VoiceListener thread (listener.py:119)
+      │  sounddevice → VAD → Whisper → TranscriptBuffer
+      │
+      ├─ Audio wake: WakeWordDetector (openWakeWord)
+      └─ Text wake:  is_wake_word_detected() (fuzzy match)
+                            │
+                            ▼
+                     IntentJudge (LLM call)
+                     → clean query string
+                            │
+                            ▼
+                    run_reply_engine() (engine.py)
+                     1. select_profile_llm()        ← LLM routing call
+                     2. memory enrichment search    ← SQLite/FAISS
+                     3. build messages + tools
+                     4. Agentic loop (max 8 turns):
+                        ├─ call_llm_streaming()     ← Ollama /api/chat
+                        ├─ parse tool_calls
+                        ├─ run_tool_with_retries()
+                        │   ├─ builtin tools (local)
+                        │   └─ MCP tools (stdio to external server)
+                        └─ append tool result → repeat
+                     5. final text response
+                            │
+                            ▼
+                     TTS engine (piper / chatterbox)
+                     → audio playback
+                            │
+                            ▼
+                     Hot window opens (3–6 s, no wake word needed)
