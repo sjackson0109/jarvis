@@ -54,6 +54,10 @@ del _os
 
 from .config import load_settings
 
+# Global sub-agent orchestrator singleton (used by desktop dashboard and reply engine)
+from .agents.lifecycle import SubAgentOrchestrator as _SubAgentOrchestrator
+_global_sub_agent_orchestrator = _SubAgentOrchestrator()
+
 
 def get_version() -> tuple[str, str]:
     """Get the application version and release channel.
