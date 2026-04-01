@@ -12,7 +12,7 @@ Implements a deterministic layered prompt composition with clear precedence:
   6. task              – task-specific execution augmentations
 
 Higher layers (lower index) set context; lower layers (higher index)
-refine or specialise. Layers are concatenated with a single newline
+refine or specialise. Layers are concatenated with a double newline
 separator. Empty layers are skipped.
 
 Inspection: `compose_prompt()` returns both the final text and a
