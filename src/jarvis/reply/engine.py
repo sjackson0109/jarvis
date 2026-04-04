@@ -11,14 +11,14 @@ Implements the JARVIS autonomy specification:
 """
 
 from __future__ import annotations
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, Any, TYPE_CHECKING
 
 from ..utils.redact import redact
 from ..profile.profiles import PROFILES, select_profile_llm, PROFILE_ALLOWED_TOOLS
 from ..tools.registry import run_tool_with_retries, generate_tools_description, generate_tools_json_schema, BUILTIN_TOOLS
 from ..tools.builtin.stop import STOP_SIGNAL
 from ..debug import debug_log
-from ..llm import chat_with_messages, extract_text_from_response
+from ..llm import chat_with_messages, extract_text_from_response, ToolsNotSupportedError
 from .enrichment import extract_search_params_for_memory
 from .prompts import ModelSize, detect_model_size, get_system_prompts
 from .errors import (
@@ -33,6 +33,7 @@ from .errors import (
 from ..task_state import begin_task, get_active_task, TaskStatus
 from ..approval import classify_request, RequestType, requires_approval, approval_prompt, assess_risk, RiskLevel
 import json
+import re
 import uuid
 from datetime import datetime, timezone
 from ..utils.location import get_location_context
@@ -561,7 +562,7 @@ def run_reply_engine(db: "Database", cfg, tts: Optional[Any],
                 stable_args = json.dumps(tool_args or {}, sort_keys=True, ensure_ascii=False)
                 signature = (tool_name, stable_args)
             except Exception:
-                signature = (tool_name, "__unserializable_args__")
+                signature = (tool_name, "__unserialised_args__")
 
             if signature in recent_tool_signatures:
                 debug_log(f"  ⚠️ Duplicate {tool_name} call - returning cached guidance", "planning")
